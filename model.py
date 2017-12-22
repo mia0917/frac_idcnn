@@ -14,10 +14,11 @@ import argparse
 
 # accept the commandline parameter
 parser = argparse.ArgumentParser()
-parser.add_argument("--epoch",required=True, type=int)
+parser.add_argument("--epoch", required=True, type=int)
 parser.add_argument("--mode", required=True, choices=["train", "test"])
 parser.add_argument("--tv_lambda", required=True, type=float)
-parser.add_argument("--opt_loss", required=True, choices=["only_d", "tf_tv", "only_d"])
+parser.add_argument("--opt_loss", required=True, choices=["only_d", "tf_tv", "frac_tv"])
+parser.add_argument("--v", type=float)
 
 # 返回的CLASS的格式
 Examples = collections.namedtuple("Examples", "paths, inputs, targets, count, steps_per_epoch")
@@ -130,7 +131,7 @@ def load_examples():
     seed = random.randint(0, 2**31 - 1)
     def transform(image):
         r = image
-        r = tf.image.random_flip_left_right(r, seed=seed)
+        # r = tf.image.random_flip_left_right(r, seed=seed)
 
         # area produces a nice downscaling, but does nearest neighbor for upscaling
         # assume we're going to be doing downscaling here
@@ -329,7 +330,7 @@ def append_index(filesets, step=False):
         for kind in ["inputs:", "outputs:", "targets:"]:
             index.write("<td><img src='images/%s'></td>" % fileset[kind])
 
-        inputs = mpimg.imread( opt.out_dir +'/images/' + fileset["inputs:"])   # 读出的图像数据是float32,[0,1]
+        inputs = mpimg.imread(opt.out_dir +'/images/' + fileset["inputs:"])   # 读出的图像数据是float32,[0,1]
         outputs = mpimg.imread(opt.out_dir + '/images/' + fileset["outputs:"])
         targets = mpimg.imread(opt.out_dir +'/images/' + fileset["targets:"])
 
@@ -342,7 +343,7 @@ def append_index(filesets, step=False):
         # # SSIM结构相似性[0,1]
         K1 = 0.01
         K2 = 0.03
-        L = 255
+        L = 1
         C1 = (K1 * L) ** 2
         C2 = (K2 * L) ** 2
         C3 = C2 / 2
@@ -363,6 +364,7 @@ def append_index(filesets, step=False):
         # DG 越大越好
         mse_to = np.mean(np.square(targets - outputs))
         mse_ti = np.mean(np.square(targets - inputs))
+        mse_ti = np.mean(np.square(targets - inputs))
 
         #DG = 10 * (tf.log(mse_ti / mse_to) / tf.log(10.0))
         #DG = 10 * (np.log(mse_ti / mse_to) / np.log(10.0))
@@ -377,6 +379,7 @@ def append_index(filesets, step=False):
 
 def frac_total_variation(images, v = 0.5, name=None):
 
+  g = math.gamma
 
   with tf.name_scope(name, 'total_variation'):
     ndims = images.get_shape().ndims
@@ -384,30 +387,40 @@ def frac_total_variation(images, v = 0.5, name=None):
     if ndims == 4:
       # generate the fractional array
 
-      a2 = (-v) * (-v+1) / (8 - 12*v + 4*v*v)
-      a1 = (-v) / (8 - 12*v + 4*v*v)
-      a0 = 1 / (8 - 12*v + 4*v*v)
-      list = [
-          a2, 0,   a2,  0, a2,
-          0, a1,   a1, a1,  0,
-          a2,a1, 8*a0, a1, a2,
-          0, a1,   a1, a1,  0,
-          a2, 0,   a2,  0, a2
-      ]
+      # 简化堆公式
+      def frac_op_creater(k):
+          first_part =  g(k-v+1) * (v/4 + v*v/8) / math.factorial(k+1)
+          second_part = g(k-v) * (1-v*v/4) / math.factorial(k)
+          third_part = g(k-v-1) * (-v/4 + v*v/8) / math.factorial(k-1)
+          return (first_part + second_part + third_part) / g(-v)
+
+      a5l = frac_op_creater(5)
+      a4l = frac_op_creater(4)
+      a3l = frac_op_creater(3)
+      a2l = frac_op_creater(2)
+      a1l = frac_op_creater(1)
+      a0 = 1-v*v-v*v*v/8
+      a1r = v/4 + v*v/8
+
+      list = [a5l, a4l, a3l, a2l, a1l, a0, a1r, 0, 0, 0, 0]
 
       # generate the fractional filter
-      filter = tf.constant(list, shape=(5, 5, 1, 1), dtype=tf.float32)
-      filter = tf.stop_gradient(filter)
+      filter_x = tf.constant(list, shape=(11, 1, 1, 1), dtype=tf.float32)
+      filter_y = tf.constant(list, shape=(1, 11, 1, 1), dtype=tf.float32)
+      filter_x = tf.stop_gradient(filter_x)
+      filter_y = tf.stop_gradient(filter_y)
 
       # operate the fractional diff
-      d_mat = tf.nn.conv2d(images, filter, [1, 1, 1, 1], 'SAME', True)
+      dx_mat = tf.nn.conv2d(images, filter_x, [1, 1, 1, 1], 'SAME', True)
+      dy_mat = tf.nn.conv2d(images, filter_y, [1, 1, 1, 1], 'SAME', True)
 
     else:
       raise ValueError('\'images\' must be either 3 or 4-dimensional.')
 
     # Calculate the total variation by taking the absolute value of the
     # pixel-differences and summing over the appropriate axis.
-    res = math_ops.reduce_sum(math_ops.abs(d_mat), axis=[1, 2, 3])
+    res = (math_ops.reduce_sum(math_ops.abs(dx_mat), axis=[1, 2, 3]) +
+           math_ops.reduce_sum(math_ops.abs(dy_mat), axis=[1, 2, 3]))
 
   return res
 
