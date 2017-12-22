@@ -7,29 +7,65 @@ import time
 from tensorflow.python import debug as tf_debug
 import random
 import numpy as np
+from tensorflow.python.ops import math_ops
+import matplotlib.pyplot as plt # plt 用于显示图片
+import matplotlib.image as mpimg # mpimg 用于读取图片
+import argparse
+
+# accept the commandline parameter
+parser = argparse.ArgumentParser()
+parser.add_argument("--epoch",required=True, type=int)
+parser.add_argument("--mode", required=True, choices=["train", "test"])
+parser.add_argument("--tv_lambda", required=True, type=float)
+parser.add_argument("--opt_loss", required=True, choices=["only_d", "tf_tv", "only_d"])
 
 # 返回的CLASS的格式
 Examples = collections.namedtuple("Examples", "paths, inputs, targets, count, steps_per_epoch")
 Model = collections.namedtuple("Model", "grads_and_vars, loss, train, outputs")
 
-
+# normal parameter
 BATCH_SIZE = 1
 EPS = 1e-12
 SUMMARY_FREQ = 100
 TRACE_FREQ = 0
-OUTDIR = 'out'
-CHECKPOINT = 'out_success'
 MAX_STEPS = None
-MAX_EPOCH = 100 # number of training epochs
 PROCESS_FREQ = 50 # display progress every progress_freq steps
 DISPLAY_FREQ = 0  # write current training images every display_freq steps
 SAVE_FREQ = 5000
-INPUTDIR = 'data_train'
-SCALE_SIZE = 286
-FLIP = True
+SCALE_SIZE = 256
+FLIP = False
 ASPECT_RATIO = 1.0
 CROP_SIZE = 256
-MODE = 'train'
+
+# always changed parameter
+
+opt = parser.parse_args()
+
+opt.input_dir = 'data_' + opt.mode
+opt.out_dir = 'out_' + opt.mode + '_' + opt.opt_loss + '_' + str(opt.epoch) + '_epoch_' + str(opt.tv_lambda) + '_lambda'
+
+if opt.mode == 'train':
+    opt.checkpoint = None
+elif opt.mode == 'test':
+    opt.checkpoint =  'out_' + 'train' + '_' + opt.opt_loss + '_' + str(opt.epoch) + '_epoch_' + str(opt.tv_lambda) + '_lambda'
+
+# preprocess
+if os.path.exists(opt.input_dir) is None:
+    os.makedirs(opt.input_dir)
+if os.path.exists(opt.out_dir) is None:
+    os.makedirs(opt.out_dir)
+
+# args data display
+for key, value in opt._get_kwargs():
+    print(key, ":", value)
+
+# opt.checkpoint = 'out_train_tf_tv_300_epoch_0.0012_lamada'
+# OUTDIR = 'out_test_tf_tv_300_epoch_0.0012_lamada'
+# MAX_EPOCH = 300 # number of training epochs
+# INPUTDIR= 'data_test'
+# LAMBDA = [0.0003, 0.0005, 0.0007]
+# OPT_LOSS = 'tf_tv' # 'tf_tv' or 'only_d' or 'frac_tv'
+# MODE = 'test'
 
 
 def preprocess(image): # ？这个预处理不知道是为什么
@@ -42,13 +78,13 @@ def deprocess(image):
         return (image + 1) / 2
 
 def load_examples():
-    if INPUTDIR is None or not os.path.exists(INPUTDIR):
-        raise Exception("input_dir does not exist")
+    if opt.input_dir is None or not os.path.exists(opt.input_dir):
+        os.makedirs(opt["input_dir"])
 
-    input_paths = glob.glob(os.path.join(INPUTDIR, "*.jpg"))
+    input_paths = glob.glob(os.path.join(opt.input_dir, "*.jpg"))
     decode = tf.image.decode_jpeg
     if len(input_paths) == 0:
-        input_paths = glob.glob(os.path.join(INPUTDIR, "*.png"))
+        input_paths = glob.glob(os.path.join(opt.input_dir, "*.png"))
         decode = tf.image.decode_png
 
     if len(input_paths) == 0:
@@ -201,10 +237,13 @@ def create_model(inputs, targets):
     outputs = tf.nn.tanh(inputs / speckle_image)
 
     # loss
-    lambda_tv = 0.003 / (256 * 256)
-    loss = tf.reduce_mean(tf.square(targets - outputs)) + lambda_tv * fractional_variation(outputs, 1.65, 2.75, 1.25 )
-    # loss = tf.reduce_mean(tf.square(targets - outputs)) + lambda_tv * tf.image.total_variation(outputs)
-    # loss = tf.reduce_mean(tf.square(targets - outputs))
+    lambda_tv = opt.tv_lambda / 256
+    if opt.opt_loss == 'only_d':
+        loss = tf.reduce_mean(tf.square(targets - outputs))
+    elif opt.opt_loss == 'tf_tv':
+        loss = tf.reduce_mean(tf.square(targets - outputs)) + lambda_tv * tf.reduce_mean(tf.image.total_variation(outputs))
+    elif opt.opt_loss == 'frac_tv':
+        loss = tf.reduce_mean(tf.square(targets - outputs)) + lambda_tv * tf.reduce_mean(frac_total_variation(outputs, 0.8))
 
     optim = tf.train.AdamOptimizer(learning_rate=0.0002, beta1=0.5) # 优化器
     grads_and_vars = optim.compute_gradients(loss) # 变量和梯度记录
@@ -223,7 +262,7 @@ def create_model(inputs, targets):
                  )
 def convert(image): return  tf.image.convert_image_dtype(image, dtype=tf.uint8, saturate=True)
 def save_images(fetches, step=None):
-    image_dir = os.path.join(OUTDIR, "images")
+    image_dir = os.path.join(opt.out_dir, "images")
     if not os.path.exists(image_dir):
         os.makedirs(image_dir)
 
@@ -243,8 +282,34 @@ def save_images(fetches, step=None):
         filesets.append(fileset)
     return filesets
 # 添加到网页
+# def append_index(filesets, step=False):
+#     index_path = os.path.join(opt.out_dir, "index.html")
+#     if os.path.exists(index_path):
+#         index = open(index_path, "a")
+#     else:
+#         index = open(index_path, "w")
+#         index.write("<html><body><table><tr>")
+#         if step:
+#             index.write("<th>step</th>")
+#         index.write("<th>name</th><th>input</th><th>output</th><th>target</th></tr>")
+#
+#     for fileset in filesets:
+#         index.write("<tr>")
+#
+#         if step:
+#             index.write("<td>%d</td>" % fileset["step"])
+#         index.write("<td>%s</td>" % fileset["name"])
+#
+#         for kind in ["inputs:", "outputs:", "targets:"]:
+#             index.write("<td><img src='images/%s'></td>" % fileset[kind])
+#
+#         index.write("</tr>")
+#     return index_path
+
+
+# 分数阶loss
 def append_index(filesets, step=False):
-    index_path = os.path.join(OUTDIR, "index.html")
+    index_path = os.path.join(opt.out_dir, "index.html")
     if os.path.exists(index_path):
         index = open(index_path, "a")
     else:
@@ -252,8 +317,8 @@ def append_index(filesets, step=False):
         index.write("<html><body><table><tr>")
         if step:
             index.write("<th>step</th>")
-        index.write("<th>name</th><th>input</th><th>output</th><th>target</th></tr>")
-
+        index.write("<th>name</th><th>input</th><th>output</th><th>target</th><th>PSNR</th><th>SSIM</th><th>UQI</th><th>DG</th></tr>")
+        # index.write("</table></body>")
     for fileset in filesets:
         index.write("<tr>")
 
@@ -264,81 +329,87 @@ def append_index(filesets, step=False):
         for kind in ["inputs:", "outputs:", "targets:"]:
             index.write("<td><img src='images/%s'></td>" % fileset[kind])
 
+        inputs = mpimg.imread( opt.out_dir +'/images/' + fileset["inputs:"])   # 读出的图像数据是float32,[0,1]
+        outputs = mpimg.imread(opt.out_dir + '/images/' + fileset["outputs:"])
+        targets = mpimg.imread(opt.out_dir +'/images/' + fileset["targets:"])
+
+        # 峰值信噪比越大越好
+        mse = np.mean(np.square(targets - outputs))
+        #psnr = 20.0 * (tf.log(255.0 / tf.sqrt(mse)) / tf.log(10.0))
+        #psnr = 20.0 * (np.log(255.0 / np.sqrt(mse)) / np.log(10.0))
+        psnr = 10 * np.log10(1/mse)
+
+        # # SSIM结构相似性[0,1]
+        K1 = 0.01
+        K2 = 0.03
+        L = 255
+        C1 = (K1 * L) ** 2
+        C2 = (K2 * L) ** 2
+        C3 = C2 / 2
+
+        u_t = np.mean(targets)
+        u_o = np.mean(outputs)
+        se_t = np.sum(np.square(targets - u_t)) / (256 * 256 - 1)
+        se_o = np.sum(np.square(outputs - u_o)) / (256 * 256 - 1)
+        se_to = np.sum(np.multiply(targets - u_t, outputs - u_o)) / (256 * 256 - 1)
+        l = (2 * u_t * u_o + C1) / (u_t ** 2 + u_o ** 2 + C1)
+        c = (2 * np.sqrt(se_t) * np.sqrt(se_o) + C2) / (se_t + se_o + C2)
+        s = (se_to + C3) / (np.sqrt(se_t) * np.sqrt(se_o) + C3)
+
+        SSIM = l * c * s
+        # UQI [-1,1]
+        UQI = np.mean((4 * se_to * u_t * u_o) / ((se_t + se_o) * (u_t**2 + u_o**2)))
+
+        # DG 越大越好
+        mse_to = np.mean(np.square(targets - outputs))
+        mse_ti = np.mean(np.square(targets - inputs))
+
+        #DG = 10 * (tf.log(mse_ti / mse_to) / tf.log(10.0))
+        #DG = 10 * (np.log(mse_ti / mse_to) / np.log(10.0))
+        DG = 10 * np.log10(mse_ti/mse_to)
+
+        index.write("<td>%.2f</td>" % psnr)
+        index.write("<td>%.3f</td>" % SSIM)
+        index.write("<td>%.3f</td>" % UQI)
+        index.write("<td>%.2f</td>" % DG)
         index.write("</tr>")
     return index_path
 
-# 分数阶loss
-def fractional_variation(image, v1, v2, v3):
+def frac_total_variation(images, v = 0.5, name=None):
 
-    g = math.gamma
 
-    # preprocessed
+  with tf.name_scope(name, 'total_variation'):
+    ndims = images.get_shape().ndims
 
-    width = image.get_shape()[1]
+    if ndims == 4:
+      # generate the fractional array
 
-    image = tf.concat([image, image[:, (width - 1):, :, :]], 1)
-    image = tf.concat([image, image[:, :, (width - 1):, :]], 2)
+      a2 = (-v) * (-v+1) / (8 - 12*v + 4*v*v)
+      a1 = (-v) / (8 - 12*v + 4*v*v)
+      a0 = 1 / (8 - 12*v + 4*v*v)
+      list = [
+          a2, 0,   a2,  0, a2,
+          0, a1,   a1, a1,  0,
+          a2,a1, 8*a0, a1, a2,
+          0, a1,   a1, a1,  0,
+          a2, 0,   a2,  0, a2
+      ]
 
-    # 求差分过程中每一点的系数
-    def w_item(w_v, n):
+      # generate the fractional filter
+      filter = tf.constant(list, shape=(5, 5, 1, 1), dtype=tf.float32)
+      filter = tf.stop_gradient(filter)
 
-        if n == 0:
-            return 1
+      # operate the fractional diff
+      d_mat = tf.nn.conv2d(images, filter, [1, 1, 1, 1], 'SAME', True)
 
-        w_pro = 1 / math.factorial(n + 1)
-        for w_i in range(0, n + 1):
-            w_pro *= w_v + w_i
-        return w_pro
+    else:
+      raise ValueError('\'images\' must be either 3 or 4-dimensional.')
 
-    # x方向每个点对这个点的分数阶差分
-    def fx(x,y,image,v):
-        x_sum = 0
+    # Calculate the total variation by taking the absolute value of the
+    # pixel-differences and summing over the appropriate axis.
+    res = math_ops.reduce_sum(math_ops.abs(d_mat), axis=[1, 2, 3])
 
-        for dx in range(1, width + 1):
-            m = abs(dx - x)
-            x_sum += w_item(v, m) * image[dx, y]
-
-        return x_sum
-
-        # y方向上每一点对于该点的差分
-    def fy(x,y,image,v):
-        y_sum = 0
-
-        for dy in range(1, width + 1):
-            m = abs(dy - y)
-            y_sum += w_item(v, m) * image[x, dy]
-
-        return y_sum
-
-    # 存放差分数据
-    new_matric_x = np.ones((width, width))
-    new_matric_y = np.ones((width, width))
-    for x in range(1, image.shape[0] - 1):
-        for y in range(1, image.shape[1] - 1):
-            new_matric_x[x-1, y-1] = fx(x, y, image, v1)
-            new_matric_y[x-1, y-1] = fy(x, y, image, v1)
-
-    # 对已差分矩阵进行一阶差分
-    Ixx = (np.column_stack((new_matric_x[:, 1:], new_matric_x[:, width - 1])) - np.column_stack((new_matric_x[:,0],new_matric_x[:, :width - 1])))/ 2
-    Iyy = (np.row_stack((new_matric_y[1:, :], new_matric_y[width - 1, :])) - np.row_stack((new_matric_y[0,:],new_matric_y[:width - 1, :]))) / 2
-
-    # 2norm 对x方向和y方向的进行平方再开方
-    new_matric_2norm = np.sqrt(np.power(new_matric_x, 2) + np.power(new_matric_y, 2))
-
-    # 堆叠方程
-    res = 0
-
-    for k in [0,1]:
-        pro = 1
-        for t in range(0, 2 * k + 1):
-            left_part = (g(2*k - v3) * np.power(new_matric_2norm, (v2 - 2*k))) / (g(-v3) * g(2*k - v3 + 1))
-            right_part = ((v2 - 2*k) * g(1 + v1) * g(2*k - v3 + 1)) / (2*k + 1) * g(v1) * g(-v3) * g(2*k - v3 + 2) * np.power(new_matric_2norm, v2-2*k-2) * (Ixx + Iyy)
-
-            pro *= (v2 - t + 1) / math.factorial(2*k) * np.sum(left_part + right_part)
-
-        res += pro
-    print(-res)
-    return -res
+  return res
 
 # load image data_train
 examples = load_examples()
@@ -380,13 +451,14 @@ with tf.name_scope("outputs_summary"):
 with tf.name_scope("targets_summary"):
     tf.summary.image("targets", convert_targets)
 
+tf.summary.scalar("loss", model.loss)
+
 for var in tf.trainable_variables():
     tf.summary.histogram(var.op.name + "/values", var)
 
 for grad, var in model.grads_and_vars:
     tf.summary.histogram(var.op.name + "/gradients", grad)
 
-#!! tf.summary.scalar("loss", model.loss)
 
 with tf.name_scope("parameter_count"):
 
@@ -394,24 +466,24 @@ with tf.name_scope("parameter_count"):
 
 saver = tf.train.Saver(max_to_keep=1)
 
-log_dir = OUTDIR if (TRACE_FREQ > 0 or SUMMARY_FREQ > 0) else None
+log_dir = opt.out_dir if (TRACE_FREQ > 0 or SUMMARY_FREQ > 0) else None
 sv = tf.train.Supervisor(logdir=log_dir, save_summaries_secs=0, saver=None )
 with sv.managed_session() as sess:
     print("parameter_count = ",sess.run(parameter_count))
 
-    if CHECKPOINT is not None:
-        checkpoint = tf.train.latest_checkpoint(CHECKPOINT)
+    if opt.checkpoint is not None:
+        checkpoint = tf.train.latest_checkpoint(opt.checkpoint)
         saver.restore(sess, checkpoint)
 
     max_step = 2**32
-    if MAX_EPOCH is not None:
-        max_step = examples.steps_per_epoch * MAX_EPOCH
+    if opt.epoch is not None:
+        max_step = examples.steps_per_epoch * opt.epoch
     if MAX_STEPS is not None:
         max_step = MAX_STEPS
 
     # test mode about max_step
     # train mode
-    if MODE == 'train':
+    if opt.mode == 'train':
         start = time.time()
 
         for step in range(max_step):
@@ -428,8 +500,9 @@ with sv.managed_session() as sess:
             fetch = {
                 "train": model.train,
                 "global_step": sv.global_step,
-                "loss": model.loss
             }
+            if should(PROCESS_FREQ):
+                fetch["loss"] = model.loss
 
             if should(SUMMARY_FREQ):
                 fetch["summary"] = sv.summary_op
@@ -464,11 +537,11 @@ with sv.managed_session() as sess:
 
                 if should(SAVE_FREQ):
                     print("saving model")
-                    saver.save(sess, os.path.join(OUTDIR, "model"), global_step=sv.global_step)
+                    saver.save(sess, os.path.join(opt.out_dir, "model"), global_step=sv.global_step)
 
                 if sv.should_stop():
                     break
-    elif MODE == 'test':
+    elif opt.mode == 'test':
         max_step = min(examples.steps_per_epoch, max_step)
         for step in range(max_step):
             results = sess.run(display_fetch)
