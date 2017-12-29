@@ -385,10 +385,58 @@ def append_index(filesets, step=False):
         index.write("</tr>")
     return index_path
 
+# def frac_total_variation(images, v = 0.5, name=None):
+#
+#   g = math.gamma
+#
+#   with tf.name_scope(name, 'total_variation'):
+#     ndims = images.get_shape().ndims
+#
+#     if ndims == 4:
+#       # generate the fractional array
+#
+#       # 简化堆公式
+#       def frac_op_creater(k):
+#           first_part =  g(k-v+1) * (v/4 + v*v/8) / math.factorial(k+1)
+#           second_part = g(k-v) * (1-v*v/4) / math.factorial(k)
+#           third_part = g(k-v-1) * (-v/4 + v*v/8) / math.factorial(k-1)
+#           return (first_part + second_part + third_part) / g(-v)
+#
+#       a5l = frac_op_creater(5)
+#       a4l = frac_op_creater(4)
+#       a3l = frac_op_creater(3)
+#       a2l = frac_op_creater(2)
+#       a1l = frac_op_creater(1)
+#       a0 = 1-v*v-v*v*v/8
+#       a1r = v/4 + v*v/8
+#
+#       list = [a5l, a4l, a3l, a2l, a1l, a0, a1r, 0, 0, 0, 0]
+#
+#       # generate the fractional filter
+#       filter_x = tf.constant(list, shape=(11, 1, 1, 1), dtype=tf.float32)
+#       filter_y = tf.constant(list, shape=(1, 11, 1, 1), dtype=tf.float32)
+#       filter_x = tf.stop_gradient(filter_x)
+#       filter_y = tf.stop_gradient(filter_y)
+#
+#       # operate the fractional diff
+#       dx_mat = tf.nn.conv2d(images, filter_x, [1, 1, 1, 1], 'SAME', True)
+#       dy_mat = tf.nn.conv2d(images, filter_y, [1, 1, 1, 1], 'SAME', True)
+#
+#     else:
+#       raise ValueError('\'images\' must be either 3 or 4-dimensional.')
+#
+#     # Calculate the total variation by taking the absolute value of the
+#     # pixel-differences and summing over the appropriate axis.
+#     res = (math_ops.reduce_sum(math_ops.abs(dx_mat), axis=[1, 2, 3]) +
+#            math_ops.reduce_sum(math_ops.abs(dy_mat), axis=[1, 2, 3]))
+#
+#   return res
+
+# load image data_train
 def frac_total_variation(images, v = 0.5, name=None):
 
   g = math.gamma
-
+  n = 7
   with tf.name_scope(name, 'total_variation'):
     ndims = images.get_shape().ndims
 
@@ -397,11 +445,14 @@ def frac_total_variation(images, v = 0.5, name=None):
 
       # 简化堆公式
       def frac_op_creater(k):
+
           first_part =  g(k-v+1) * (v/4 + v*v/8) / math.factorial(k+1)
           second_part = g(k-v) * (1-v*v/4) / math.factorial(k)
           third_part = g(k-v-1) * (-v/4 + v*v/8) / math.factorial(k-1)
           return (first_part + second_part + third_part) / g(-v)
 
+      a7l = g(n-v-1)*(-v/4+v*v/8) / (math.factorial(n-1)*g(-v))
+      a6l = g(n-v-1)*(1-v*v/4) / (math.factorial(n-1)*g(-v)) + g(n-v-2)*(-v/4+v*v/8) / (math.factorial(n-2)*g(-v))
       a5l = frac_op_creater(5)
       a4l = frac_op_creater(4)
       a3l = frac_op_creater(3)
@@ -410,11 +461,11 @@ def frac_total_variation(images, v = 0.5, name=None):
       a0 = 1-v*v-v*v*v/8
       a1r = v/4 + v*v/8
 
-      list = [a5l, a4l, a3l, a2l, a1l, a0, a1r, 0, 0, 0, 0]
+      list = [a7l, a6l, a5l, a4l, a3l, a2l, a1l, a0, a1r, 0, 0, 0, 0, 0, 0]
 
       # generate the fractional filter
-      filter_x = tf.constant(list, shape=(11, 1, 1, 1), dtype=tf.float32)
-      filter_y = tf.constant(list, shape=(1, 11, 1, 1), dtype=tf.float32)
+      filter_x = tf.constant(list, shape=(15, 1, 1, 1), dtype=tf.float32)
+      filter_y = tf.constant(list, shape=(1, 15, 1, 1), dtype=tf.float32)
       filter_x = tf.stop_gradient(filter_x)
       filter_y = tf.stop_gradient(filter_y)
 
@@ -432,7 +483,7 @@ def frac_total_variation(images, v = 0.5, name=None):
 
   return res
 
-# load image data_train
+
 examples = load_examples()
 
 # model return grads_and_vars, loss, train, outputs, step_update
