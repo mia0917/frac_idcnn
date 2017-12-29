@@ -18,7 +18,7 @@ parser.add_argument("--epoch", required=True, type=int)
 parser.add_argument("--mode", required=True, choices=["train", "test"])
 parser.add_argument("--tv_lambda", required=True, type=float)
 parser.add_argument("--opt_loss", required=True, choices=["only_d", "tf_tv", "frac_tv"])
-parser.add_argument("--v", type=float)
+parser.add_argument("--v", default=1.0, type=float)
 
 # 返回的CLASS的格式
 Examples = collections.namedtuple("Examples", "paths, inputs, targets, count, steps_per_epoch")
@@ -45,10 +45,15 @@ opt = parser.parse_args()
 opt.input_dir = 'data_' + opt.mode
 opt.out_dir = 'out_' + opt.mode + '_' + opt.opt_loss + '_' + str(opt.epoch) + '_epoch_' + str(opt.tv_lambda) + '_lambda'
 
+if opt.opt_loss == 'frac_tv':
+    opt.out_dir += '_frac_' + str(opt.v)
+
 if opt.mode == 'train':
     opt.checkpoint = None
 elif opt.mode == 'test':
     opt.checkpoint =  'out_' + 'train' + '_' + opt.opt_loss + '_' + str(opt.epoch) + '_epoch_' + str(opt.tv_lambda) + '_lambda'
+    if opt.opt_loss == 'frac_tv':
+        opt.checkpoint += '_frac_' + str(opt.v)
 
 # preprocess
 if os.path.exists(opt.input_dir) is None:
@@ -158,7 +163,7 @@ def load_examples():
         inputs=inputs_batch,
         targets=targets_batch,
         count=len(input_paths),
-        steps_per_epoch=steps_per_epoch,
+        steps_per_epoch=steps_per_epoch
     )
 
 def conv(batch_input, out_channels, stride):
@@ -237,14 +242,17 @@ def create_model(inputs, targets):
 
     outputs = tf.nn.tanh(inputs / speckle_image)
 
+    width = tf.shape(outputs)[1]
+    height = tf.shape(outputs)[0]
+
     # loss
-    lambda_tv = opt.tv_lambda / 256
+    lambda_tv = opt.tv_lambda
     if opt.opt_loss == 'only_d':
         loss = tf.reduce_mean(tf.square(targets - outputs))
     elif opt.opt_loss == 'tf_tv':
-        loss = tf.reduce_mean(tf.square(targets - outputs)) + lambda_tv * tf.reduce_mean(tf.image.total_variation(outputs))
+        loss = tf.reduce_mean(tf.square(targets - outputs)) + lambda_tv * tf.reduce_mean(tf.image.total_variation(outputs)) / (SCALE_SIZE * SCALE_SIZE)
     elif opt.opt_loss == 'frac_tv':
-        loss = tf.reduce_mean(tf.square(targets - outputs)) + lambda_tv * tf.reduce_mean(frac_total_variation(outputs, 0.8))
+        loss = tf.reduce_mean(tf.square(targets - outputs)) + lambda_tv * tf.reduce_mean(frac_total_variation(outputs, opt.v)) / (SCALE_SIZE * SCALE_SIZE)
 
     optim = tf.train.AdamOptimizer(learning_rate=0.0002, beta1=0.5) # 优化器
     grads_and_vars = optim.compute_gradients(loss) # 变量和梯度记录
